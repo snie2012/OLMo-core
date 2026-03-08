@@ -6,7 +6,7 @@ RAW_DIR="/home/shaoliang/dolma3_mix-6T/data"
 OUT_DIR="/home/shaoliang/dolma3_tokenized"
 TOKENIZED_DIR="$OUT_DIR/preprocessed/dolma3-0625/v0.1-official/allenai/dolma2-tokenizer"
 LOG="$OUT_DIR/tokenize_all.log"
-TOKENIZE_SCRIPT="/home/shaoliang/OLMo-core/tokenize_data.sh"
+TOKENIZE_SCRIPT="/home/shaoliang/OLMo-core/scripts/data/tokenize_data.sh"
 
 echo "[$(date)] watch_and_tokenize.sh started" | tee -a "$LOG"
 

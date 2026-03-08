@@ -16,7 +16,7 @@ set -euo pipefail
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 OLMO_DIR="/home/shaoliang/OLMo-core"
-SAVE_DIR_BASE="/home/shaoliang/checkpoints/olmo3-7b"
+SAVE_DIR_BASE="/home/shaoliang/olmo_checkpoints/olmo3-7b"
 SAVE_DIR="${SAVE_DIR_BASE}/job-${SLURM_JOB_ID:-manual}"
 WORK_DIR="/home/shaoliang/dataset-cache"
 CONDA_ENV="olmo"
@@ -57,7 +57,7 @@ echo "Master IP:     $MASTER_ADDR:$MASTER_PORT"
 echo "Working dir:   $OLMO_DIR"
 echo "Save base dir: $SAVE_DIR_BASE"
 echo "Save dir:      $SAVE_DIR"
-echo "Overrides:     --train_module.compile_model=true --train_module.rank_microbatch_size=8192 --data_loader.global_batch_size=524288"
+echo "Overrides:     --train_module.compile_model=true --train_module.rank_microbatch_size=8192 --data_loader.global_batch_size=524288 --checkpointer.save_interval=10000"
 echo "============================================"
 
 # ── GPU cleanup ─────────────────────────────────────────────────────────────────
@@ -93,5 +93,6 @@ exec torchrun \
     --work-dir='"$WORK_DIR"' \
     --train_module.compile_model=true \
     --train_module.rank_microbatch_size=8192 \
-    --data_loader.global_batch_size=524288
+    --data_loader.global_batch_size=524288 \
+    --checkpointer.save_interval=10000
 '
