@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
@@ -133,7 +134,7 @@ def main(
             config.train_module.tp_config = None  # type: ignore
 
     if torch.cuda.is_available():
-        backend = "cpu:gloo,cuda:nccl"
+        backend = os.environ.get("OLMO_DIST_BACKEND", "cpu:gloo,cuda:nccl")
     else:
         backend = None
     prepare_training_environment(shared_filesystem=not is_url(opts.save_folder), backend=backend)

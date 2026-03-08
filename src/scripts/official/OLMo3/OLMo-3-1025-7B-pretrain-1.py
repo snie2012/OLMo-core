@@ -1,10 +1,14 @@
 """
-Official pre-training script for OLMo-3-1025-7B.
+Pre-training script for OLMo-3-1025-7B using locally tokenized data.
 
-Part 1 of 2. See OLMo-3-1025-7B-pretrain-2.py for part 2.
+Based on the official OLMo-3-1025-7B-pretrain-1.py, adapted to load tokenized
+.npy files from a local directory instead of AI2's DataMix paths.
 """
 
 import argparse
+import glob
+import os
+import time
 from typing import List
 
 from olmo_core.config import DType
@@ -37,8 +41,35 @@ from olmo_core.train.train_module import (
     TransformerTrainModuleConfig,
 )
 
+TOKENIZED_DATA_ROOT = "/home/shaoliang/dolma3_tokenized"
+TOKENIZED_GLOB = (
+    TOKENIZED_DATA_ROOT
+    + "/preprocessed/dolma3-0625/v0.1-official/allenai/dolma2-tokenizer/**/*.npy"
+)
+
 DEFAULT_SEQUENCE_LENGTH = 8192
-GLOBAL_BATCH_SIZE = 8192 * 512  # ~4M tokens
+
+
+def _get_stable_npy_paths(glob_pattern: str, min_age_seconds: int = 3600) -> List[str]:
+    """Return only .npy files whose parent directory has not been modified recently."""
+    all_files = sorted(glob.glob(glob_pattern, recursive=True))
+    now = time.time()
+    stable_dirs: dict[str, bool] = {}
+    stable = []
+    for f in all_files:
+        d = os.path.dirname(f)
+        if d not in stable_dirs:
+            newest = max(os.path.getmtime(p) for p in glob.glob(os.path.join(d, "*.npy")))
+            stable_dirs[d] = (now - newest) >= min_age_seconds
+        if stable_dirs[d]:
+            stable.append(f)
+    print(f"[data] {len(stable)}/{len(all_files)} files from stable directories (>{min_age_seconds}s old)")
+    if not stable:
+        raise FileNotFoundError(f"No stable .npy files found for pattern {glob_pattern!r}")
+    return stable
+
+
+GLOBAL_BATCH_SIZE = 8192 * 384  # ~3.1M tokens (divisible by 96 GPUs * 4 seqs/GPU)
 LR = 3e-4
 
 
@@ -51,10 +82,10 @@ def build_config(opts: argparse.Namespace, overrides: List[str]) -> ExperimentCo
         attn_backend=AttentionBackendName.flash_2,
     )
 
-    dataset_config = NumpyFSLDatasetConfig.from_data_mix(
-        DataMix.OLMo_mix_0625_official,
+    stable_paths = _get_stable_npy_paths(TOKENIZED_GLOB, min_age_seconds=3600)
+    dataset_config = NumpyFSLDatasetConfig(
+        paths=stable_paths,
         tokenizer=tokenizer_config,
-        mix_base_dir=opts.data_root,
         sequence_length=sequence_length,
         max_target_sequence_length=max(8192, sequence_length),
         work_dir=opts.work_dir,
@@ -122,8 +153,10 @@ def build_config(opts: argparse.Namespace, overrides: List[str]) -> ExperimentCo
             "wandb",
             WandBCallback(
                 name=opts.name,
+                project="shaoliang_pretrain",
+                entity="character",
                 cancel_check_interval=10,
-                enabled=False,  # NOTE: change to true to enable
+                enabled=True,  # NOTE: change to true to enable
             ),
         )
         .with_callback("config_saver", ConfigSaverCallback())
@@ -132,7 +165,7 @@ def build_config(opts: argparse.Namespace, overrides: List[str]) -> ExperimentCo
             LMEvaluatorCallbackConfig(
                 eval_dataset=NumpyPaddedFSLDatasetConfig.from_data_mix(
                     DataMix.v3_small_ppl_validation,
-                    mix_base_dir=opts.data_root,
+                    mix_base_dir=TOKENIZED_DATA_ROOT,
                     sequence_length=sequence_length,
                     tokenizer=tokenizer_config,
                     work_dir=opts.work_dir,
