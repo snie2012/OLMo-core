@@ -32,6 +32,14 @@ Usage examples::
         --top-p 0.9 \
         --device cuda \
         --dtype bfloat16
+
+    # Read prompts from a file and write results to a JSONL file:
+    python infer_transformers.py \
+        --model /home/shaoliang/olmo_checkpoints/olmo3-7b/job-10104/step60000 \
+        --prompts-file inputs/prompts_1000.txt \
+        --output-file outputs/results.jsonl \
+        --device cuda \
+        --dtype bfloat16
 """
 
 import argparse
@@ -39,6 +47,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import torch
@@ -157,8 +166,28 @@ def parse_args() -> argparse.Namespace:
         "--prompts",
         type=str,
         nargs="+",
-        default=["Language modeling is "],
-        help="One or more prompt strings to generate from.",
+        default=None,
+        help="One or more prompt strings to generate from. Mutually exclusive with --prompts-file.",
+    )
+    parser.add_argument(
+        "--prompts-file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a plain-text file with one prompt per line. "
+            "Defaults to inputs/prompts_1000.txt when --prompts is not set. "
+            "Mutually exclusive with --prompts."
+        ),
+    )
+    parser.add_argument(
+        "--output-file",
+        type=str,
+        default=None,
+        help=(
+            "Path to write results as a JSONL file with 'input' and 'text' fields. "
+            "Defaults to outputs/results_<timestamp>.jsonl. "
+            "When not set and --prompts is given inline, results are printed to stdout."
+        ),
     )
     parser.add_argument(
         "--max-new-tokens",
@@ -235,6 +264,34 @@ def as_model_id(model_path: str):
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_DEFAULT_INPUTS_DIR = _SCRIPT_DIR / "inputs"
+_DEFAULT_OUTPUTS_DIR = _SCRIPT_DIR / "outputs"
+_DEFAULT_PROMPTS_FILE = _DEFAULT_INPUTS_DIR / "prompts_1000.txt"
+
+
+def _default_output_file() -> Path:
+    """Return a timestamped default output path, e.g. outputs/results_20260309_143022.jsonl."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return _DEFAULT_OUTPUTS_DIR / f"results_{ts}.jsonl"
+
+
+def _load_prompts(args: argparse.Namespace) -> list:
+    """Return the list of prompts from --prompts, --prompts-file, or the default file."""
+    if args.prompts is not None and args.prompts_file is not None:
+        raise ValueError("--prompts and --prompts-file are mutually exclusive.")
+    if args.prompts is not None:
+        return args.prompts
+    prompts_path = Path(args.prompts_file) if args.prompts_file else _DEFAULT_PROMPTS_FILE
+    lines = [line.rstrip("\n") for line in prompts_path.read_text().splitlines() if line.strip()]
+    log.info(f"Loaded {len(lines)} prompts from {prompts_path}")
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -279,9 +336,11 @@ def main() -> None:
     model.eval()
     log.info(f"Model loaded. Parameters: {sum(p.numel() for p in model.parameters()):,}\n")
 
+    prompts = _load_prompts(args)
+
     # --- Tokenize ---
     inputs = tokenizer(
-        args.prompts,
+        prompts,
         return_tensors="pt",
         return_token_type_ids=False,
         padding=True,
@@ -290,6 +349,7 @@ def main() -> None:
         inputs = {k: v.to(args.device) for k, v in inputs.items()}
 
     # --- Generate ---
+    log.info(f"Generating for {len(prompts)} prompt(s)...\n")
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
@@ -299,13 +359,23 @@ def main() -> None:
             top_p=args.top_p if args.do_sample else None,
         )
 
-    # --- Decode & print ---
+    # --- Decode & write or print ---
     decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-    for i, (prompt, text) in enumerate(zip(args.prompts, decoded)):
-        print(f"--- Prompt {i + 1} ---")
-        print(f"Input:  {prompt!r}")
-        print(f"Output: {text!r}")
-        print()
+
+    if args.output_file or args.prompts_file or args.prompts is None:
+        out_path = Path(args.output_file) if args.output_file else _default_output_file()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w") as f:
+            for prompt, text in zip(prompts, decoded):
+                record = {"input": prompt, "text": text}
+                f.write(json.dumps(record) + "\n")
+        log.info(f"Wrote {len(decoded)} results to {out_path}")
+    else:
+        for i, (prompt, text) in enumerate(zip(prompts, decoded)):
+            print(f"--- Prompt {i + 1} ---")
+            print(f"Input:  {prompt!r}")
+            print(f"Output: {text!r}")
+            print()
 
 
 if __name__ == "__main__":

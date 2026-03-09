@@ -27,11 +27,17 @@ Usage examples::
 
     # Custom prompts, settings, and multi-GPU tensor parallelism:
     python infer_vllm.py \
-        --model /home/shaoliang/olmo_checkpoints/olmo3-7b/job-10104/step50000 \
+        --model /home/shaoliang/olmo_checkpoints/olmo3-7b/job-10115/step0 \
         --prompts "Language modeling is" "The capital of France is" \
         --max-tokens 200 \
         --temperature 0.8 \
         --top-p 0.9 \
+        --tensor-parallel-size 8
+
+    # Read prompts from a file and write results to a txt file:
+    python infer_vllm.py \
+        --model /home/shaoliang/olmo_checkpoints/olmo3-7b/job-10115/step0 \
+        --prompts-file inputs/prompts_1000.txt \
         --tensor-parallel-size 4
 """
 
@@ -40,6 +46,7 @@ import json
 import logging
 import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -151,8 +158,28 @@ def parse_args() -> argparse.Namespace:
         "--prompts",
         type=str,
         nargs="+",
-        default=["Language modeling is"],
-        help="One or more prompt strings to generate from.",
+        default=None,
+        help="One or more prompt strings to generate from. Mutually exclusive with --prompts-file.",
+    )
+    parser.add_argument(
+        "--prompts-file",
+        type=str,
+        default=None,
+        help=(
+            "Path to a plain-text file with one prompt per line. "
+            "Defaults to scripts/inference/inputs/prompts_1000.txt when --prompts is not set. "
+            "Mutually exclusive with --prompts."
+        ),
+    )
+    parser.add_argument(
+        "--output-file",
+        type=str,
+        default=None,
+        help=(
+            "Path to write results as a JSONL file (one JSON object per prompt). "
+            "Defaults to scripts/inference/outputs/results_<timestamp>.txt. "
+            "When not set explicitly and --prompts-file is given, a matching filename is used."
+        ),
     )
     parser.add_argument(
         "--max-tokens",
@@ -225,6 +252,30 @@ def as_model_id(model_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_DEFAULT_INPUTS_DIR = _SCRIPT_DIR / "inputs"
+_DEFAULT_OUTPUTS_DIR = _SCRIPT_DIR / "outputs"
+_DEFAULT_PROMPTS_FILE = _DEFAULT_INPUTS_DIR / "prompts_1000.txt"
+
+
+def _default_output_file() -> Path:
+    """Return a timestamped default output path, e.g. outputs/results_20260309_143022.jsonl."""
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return _DEFAULT_OUTPUTS_DIR / f"results_{ts}.jsonl"
+
+
+def _load_prompts(args: argparse.Namespace) -> list:
+    """Return the list of prompts from --prompts, --prompts-file, or the default file."""
+    if args.prompts is not None and args.prompts_file is not None:
+        raise ValueError("--prompts and --prompts-file are mutually exclusive.")
+    if args.prompts is not None:
+        return args.prompts
+    prompts_path = Path(args.prompts_file) if args.prompts_file else _DEFAULT_PROMPTS_FILE
+    lines = [line.rstrip("\n") for line in prompts_path.read_text().splitlines() if line.strip()]
+    log.info(f"Loaded {len(lines)} prompts from {prompts_path}")
+    return lines
+
+
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     args = parse_args()
@@ -266,17 +317,31 @@ def main() -> None:
         max_tokens=args.max_tokens,
     )
 
-    # --- Generate ---
-    log.info(f"Generating for {len(args.prompts)} prompt(s)...\n")
-    outputs = llm.generate(args.prompts, sampling_params)
+    prompts = _load_prompts(args)
 
-    # --- Print results ---
-    for i, output in enumerate(outputs):
-        generated_text = output.outputs[0].text
-        print(f"--- Prompt {i + 1} ---")
-        print(f"Input:  {output.prompt!r}")
-        print(f"Output: {generated_text!r}")
-        print()
+    # --- Generate ---
+    log.info(f"Generating for {len(prompts)} prompt(s)...\n")
+    outputs = llm.generate(prompts, sampling_params)
+
+    # --- Write or print results ---
+    if args.output_file or args.prompts_file or args.prompts is None:
+        out_path = Path(args.output_file) if args.output_file else _default_output_file()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w") as f:
+            for output in outputs:
+                record = {
+                    "input": output.prompt,
+                    "text": output.prompt + output.outputs[0].text,
+                }
+                f.write(json.dumps(record) + "\n")
+        log.info(f"Wrote {len(outputs)} results to {out_path}")
+    else:
+        for i, output in enumerate(outputs):
+            generated_text = output.outputs[0].text
+            print(f"--- Prompt {i + 1} ---")
+            print(f"Input:  {output.prompt!r}")
+            print(f"Output: {generated_text!r}")
+            print()
 
 
 if __name__ == "__main__":
