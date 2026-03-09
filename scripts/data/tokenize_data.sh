@@ -66,7 +66,8 @@ echo "Found $TOTAL source directories to tokenize."
 echo ""
 
 DONE_DIR="$OUT_DIR/.done"
-mkdir -p "$DONE_DIR"
+LOCK_DIR="$OUT_DIR/.locks"
+mkdir -p "$DONE_DIR" "$LOCK_DIR"
 
 IDX=0
 SKIPPED=0
@@ -74,25 +75,36 @@ for SRC_DIR in $SOURCES; do
     SRC_NAME=$(basename "$SRC_DIR")
     IDX=$((IDX + 1))
     MARKER="$DONE_DIR/$SRC_NAME"
+    LOCK="$LOCK_DIR/$SRC_NAME"
 
     if [[ -f "$MARKER" ]]; then
         SKIPPED=$((SKIPPED + 1))
         continue
     fi
 
+    # Atomic claim via mkdir (NFS-safe). Skip if another worker already claimed it.
+    if ! mkdir "$LOCK" 2>/dev/null; then
+        echo "[$IDX/$TOTAL] SKIP $SRC_NAME (claimed by another worker on $(cat "$LOCK/worker" 2>/dev/null))"
+        SKIPPED=$((SKIPPED + 1))
+        continue
+    fi
+    echo "$(hostname)" > "$LOCK/worker"
+
     FILE_COUNT=$(find "$SRC_DIR" -name '*.jsonl.zst' 2>/dev/null | wc -l)
     if [[ "$FILE_COUNT" -eq 0 ]]; then
         echo "[$IDX/$TOTAL] SKIP $SRC_NAME (no .jsonl.zst files yet)"
+        rmdir "$LOCK" 2>/dev/null || true
         continue
     fi
 
     DEST="$OUT_DIR/preprocessed/dolma3-0625/v0.1-official/allenai/dolma2-tokenizer/$SRC_NAME"
     mkdir -p "$DEST"
 
-    echo "[$IDX/$TOTAL] Tokenizing $SRC_NAME ($FILE_COUNT files) -> $DEST"
+    echo "[$IDX/$TOTAL] Tokenizing $SRC_NAME ($FILE_COUNT files) -> $DEST [worker: $(hostname)]"
 
     if $DRY_RUN; then
         echo "  [DRY RUN] dolma tokens --documents '$SRC_DIR/*.jsonl.zst' --destination '$DEST' ..."
+        rmdir "$LOCK" 2>/dev/null || true
         continue
     fi
 

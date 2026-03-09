@@ -15,11 +15,11 @@ Usage examples::
 
     # Raw OLMo-core checkpoint – conversion happens automatically:
     python infer_vllm.py \
-        --model /home/shaoliang/checkpoints/olmo3-7b/job-10104/step10000
+        --model /home/shaoliang/olmo_checkpoints/olmo3-7b/job-10104/step10000
 
     # Same, but save the converted checkpoint to a custom location:
     python infer_vllm.py \
-        --model /home/shaoliang/checkpoints/olmo3-7b/job-10104/step10000 \
+        --model /home/shaoliang/olmo_checkpoints/olmo3-7b/job-10104/step10000 \
         --hf-output-dir /path/to/hf_ckpt
 
     # Pre-converted HuggingFace checkpoint or Hub model ID:
@@ -27,7 +27,7 @@ Usage examples::
 
     # Custom prompts, settings, and multi-GPU tensor parallelism:
     python infer_vllm.py \
-        --model /home/shaoliang/checkpoints/olmo3-7b/job-10104/step10000 \
+        --model /home/shaoliang/olmo_checkpoints/olmo3-7b/job-10104/step50000 \
         --prompts "Language modeling is" "The capital of France is" \
         --max-tokens 200 \
         --temperature 0.8 \
