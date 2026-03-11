@@ -192,8 +192,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=100,
-        help="Maximum number of new tokens to generate.",
+        default=512,
+        help=(
+            "Maximum number of new tokens to generate. Defaults to 512. "
+            "For pretrained (base) checkpoints the only natural stop is EOS "
+            "(<|endoftext|>), so set this to avoid runaway generation."
+        ),
     )
     parser.add_argument(
         "--temperature",
@@ -273,10 +277,27 @@ _DEFAULT_OUTPUTS_DIR = _SCRIPT_DIR / "outputs"
 _DEFAULT_PROMPTS_FILE = _DEFAULT_INPUTS_DIR / "prompts_1000.txt"
 
 
-def _default_output_file() -> Path:
-    """Return a timestamped default output path, e.g. outputs/results_20260309_143022.jsonl."""
+def _checkpoint_name(model_path: str) -> str:
+    """Derive a short, filesystem-safe name from a checkpoint path or Hub model ID.
+
+    Examples:
+        /path/to/olmo3-7b/job-10115/step10000  ->  job-10115_step10000
+        allenai/OLMo-2-1124-7B                 ->  allenai_OLMo-2-1124-7B
+    """
+    p = Path(model_path)
+    if p.exists():
+        parts = p.parts
+        name = "_".join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+    else:
+        name = model_path.replace("/", "_")
+    return name.replace(" ", "_")
+
+
+def _default_output_file(model_path: str) -> Path:
+    """Return a timestamped default output path, e.g. outputs/results_job-10115_step10000_20260309_143022.jsonl."""
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return _DEFAULT_OUTPUTS_DIR / f"results_{ts}.jsonl"
+    ckpt = _checkpoint_name(model_path)
+    return _DEFAULT_OUTPUTS_DIR / f"results_{ckpt}_{ts}.jsonl"
 
 
 def _load_prompts(args: argparse.Namespace) -> list:
@@ -363,11 +384,12 @@ def main() -> None:
     decoded = tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
     if args.output_file or args.prompts_file or args.prompts is None:
-        out_path = Path(args.output_file) if args.output_file else _default_output_file()
+        out_path = Path(args.output_file) if args.output_file else _default_output_file(args.model)
         out_path.parent.mkdir(parents=True, exist_ok=True)
+        ckpt_name = _checkpoint_name(args.model)
         with out_path.open("w") as f:
             for prompt, text in zip(prompts, decoded):
-                record = {"input": prompt, "text": text}
+                record = {"checkpoint": ckpt_name, "input": prompt, "text": text}
                 f.write(json.dumps(record) + "\n")
         log.info(f"Wrote {len(decoded)} results to {out_path}")
     else:
